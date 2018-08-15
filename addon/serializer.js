@@ -3,7 +3,7 @@ import Collection from './orm/collection';
 import PolymorphicCollection from './orm/polymorphic-collection';
 import extend from './utils/extend';
 import { singularize, pluralize, camelize } from './utils/inflector';
-
+import assert from './assert';
 import _isFunction from 'lodash/isFunction';
 import _isArray from 'lodash/isArray';
 import _isEmpty from 'lodash/isEmpty';
@@ -14,7 +14,7 @@ import _ from 'lodash';
 
 class Serializer {
 
-  constructor(registry, type, request) {
+  constructor(registry, type, request = {}) {
     this.registry = registry;
     this.type = type;
     this.request = request;
@@ -72,6 +72,11 @@ class Serializer {
     let hashWithRoot;
 
     if (this.root) {
+      assert(
+        !(resource instanceof PolymorphicCollection),
+        `The base Serializer class cannot serialize a top-level PolymorphicCollection when root is true, since PolymorphicCollections have no type.`
+      );
+
       let serializer = this.serializerFor(resource.modelName);
       let rootKey = serializer.keyForResource(resource);
       hashWithRoot = { [rootKey]: hash };
@@ -103,13 +108,32 @@ class Serializer {
   }
 
   getHashForResource(resource, removeForeignKeys = false, didSerialize = {}, lookupSerializer = false) {
-    let hash;
-    let serializer = lookupSerializer ? this.serializerFor(resource.modelName) : this; // this is used for embedded responses
+    let hash,
+      serializer;
+
+    if (!lookupSerializer) {
+      serializer = this; // this is used for embedded responses
+    }
+
+    // PolymorphicCollection lacks a modelName, but is dealt with in the map
+    // by looking up the serializer on a per-model basis
+    if (lookupSerializer && resource.modelName) {
+      serializer = this.serializerFor(resource.modelName);
+    }
 
     if (this.isModel(resource)) {
       hash = serializer._hashForModel(resource, removeForeignKeys, didSerialize);
     } else {
-      hash = resource.models.map((m) => serializer._hashForModel(m, removeForeignKeys, didSerialize));
+      hash = resource.models.map((m) => {
+        let modelSerializer = serializer;
+
+        if (!modelSerializer) {
+          // Can't get here if lookupSerializer is false, so look it up
+          modelSerializer = this.serializerFor(m.modelName);
+        }
+
+        return modelSerializer._hashForModel(m, removeForeignKeys, didSerialize);
+      });
     }
 
     if (this.embed) {
@@ -273,45 +297,39 @@ class Serializer {
 
     if (this.serializeIds === 'always') {
       model.associationKeys.forEach((key) => {
-        let association = model[key];
-        if (this.isCollection(association)) {
+        let resource = model[key];
+
+        if (this.isCollection(resource)) {
           let formattedKey = this.keyForRelationshipIds(key);
-          newHash[formattedKey] = model[key].models.map((m) => m.id);
-        } else if (association) {
+          newHash[formattedKey] = model[`${singularize(key)}Ids`];
+
+        } else if (resource) {
           let formattedKey = this.keyForForeignKey(key);
           newHash[formattedKey] = model[`${key}Id`];
         }
       });
+
     } else if (this.serializeIds === 'included') {
       this.getKeysForIncluded().forEach((key) => {
-        let association = model[key];
+        let resource = model[key];
+        let association = model.associationFor(key);
 
-        if (model.associationFor(key).isPolymorphic) {
-          if (association instanceof PolymorphicCollection) {
-            let formattedKey = this.keyForRelationship(key);
+        if (this.isCollection(resource)) {
+          let formattedKey = this.keyForRelationshipIds(key);
 
-            newHash[formattedKey] = model[`${singularize(key)}Ids`];
-          } else if (association instanceof Collection) {
-            let formattedKey = this.keyForRelationshipIds(key);
+          newHash[formattedKey] = model[`${singularize(key)}Ids`];
 
-            newHash[formattedKey] = model[key].models.map((m) => m.id);
-          } else {
-            let formattedTypeKey = this.keyForPolymorphicForeignKeyType(key);
-            let formattedIdKey = this.keyForPolymorphicForeignKeyId(key);
+        } else if (this.isModel(resource) && association.isPolymorphic) {
+          let formattedTypeKey = this.keyForPolymorphicForeignKeyType(key);
+          let formattedIdKey = this.keyForPolymorphicForeignKeyId(key);
 
-            newHash[formattedTypeKey] = model[`${key}Id`].type;
-            newHash[formattedIdKey] = model[`${key}Id`].id;
-          }
-        } else {
-          if (this.isCollection(association)) {
-            let formattedKey = this.keyForRelationshipIds(key);
+          newHash[formattedTypeKey] = model[`${key}Id`].type;
+          newHash[formattedIdKey] = model[`${key}Id`].id;
 
-            newHash[formattedKey] = model[key].models.map((m) => m.id);
-          } else if (association) {
-            let formattedKey = this.keyForForeignKey(key);
+        } else if (this.isModel(resource)) {
+          let formattedKey = this.keyForForeignKey(key);
 
-            newHash[formattedKey] = model[`${key}Id`];
-          }
+          newHash[formattedKey] = model[`${key}Id`];
         }
       });
     }

@@ -1,8 +1,7 @@
 /* eslint no-console: 0 */
 
 import { Promise } from 'rsvp';
-
-import { pluralize, camelize } from './utils/inflector';
+import { singularize, pluralize, camelize } from './utils/inflector';
 import { toCollectionName, toInternalCollectionName } from 'ember-cli-mirage/utils/normalize-name';
 import { getModels } from './ember-data';
 import { hasEmberData } from './utils/ember-data';
@@ -38,9 +37,17 @@ function createPretender(server) {
 
     this.handledRequest = function(verb, path, request) {
       if (server.shouldLog()) {
-        console.log(`Mirage: [${request.status}] ${verb.toUpperCase()} ${request.url}`);
-        let { responseText } = request;
-        let loggedResponse;
+        console.groupCollapsed(
+          `Mirage: [${request.status}] ${verb.toUpperCase()} ${request.url}`
+        );
+        let { requestBody, responseText } = request;
+        let loggedRequest, loggedResponse;
+
+        try {
+          loggedRequest = JSON.parse(requestBody);
+        } catch(e) {
+          loggedRequest = requestBody;
+        }
 
         try {
           loggedResponse = JSON.parse(responseText);
@@ -48,7 +55,12 @@ function createPretender(server) {
           loggedResponse = responseText;
         }
 
-        console.log(loggedResponse);
+        console.log({
+          request: loggedRequest,
+          response: loggedResponse,
+          raw: request
+        });
+        console.groupEnd();
       }
     };
 
@@ -358,7 +370,7 @@ export default class Server {
       let attrs = OriginalFactory.attrs || {};
       this._validateTraits(traits, OriginalFactory, type);
       let mergedExtensions = this._mergeExtensions(attrs, traits, overrides);
-      this._mapAssociationsFromAttributes(type, attrs);
+      this._mapAssociationsFromAttributes(type, attrs, overrides);
       this._mapAssociationsFromAttributes(type, mergedExtensions);
 
       let Factory = OriginalFactory.extend(mergedExtensions);
@@ -384,6 +396,11 @@ export default class Server {
   }
 
   create(type, ...options) {
+    assert(
+      this._validateCreateType(type),
+      `You called server.create('${type}') but no model or factory was found. Make sure you're using the singularized version of your model.`
+    );
+
     // When there is a Model defined, we should return an instance
     // of it instead of returning the bare attributes.
     let traits = options.filter((arg) => arg && typeof arg === 'string');
@@ -393,7 +410,7 @@ export default class Server {
     let attrs = this.build(type, ...traits, overrides);
     let modelOrRecord;
 
-    if (this.schema && this.schema[toCollectionName(type)]) {
+    if (this.schema && this.schema.modelFor(camelize(type))) {
       let modelClass = this.schema[toCollectionName(type)];
 
       modelOrRecord = modelClass.create(attrs);
@@ -408,7 +425,7 @@ export default class Server {
         collection = this.db[collectionName];
       }
 
-      assert(collection, `You called server.create(${type}) but no model or factory was found. Try \`ember g mirage-model ${type}\`.`);
+      assert(collection, `You called server.create('${type}') but no model or factory was found. Make sure you're using the singularized version of your model.`);
       modelOrRecord = collection.insert(attrs);
     }
 
@@ -423,6 +440,10 @@ export default class Server {
   }
 
   createList(type, amount, ...traitsAndOverrides) {
+    assert(
+      this._validateCreateType(type),
+      `You called server.createList('${type}') but no model or factory was found. Make sure you're using the singularized version of your model.`
+    );
     assert(_isInteger(amount), `second argument has to be an integer, you passed: ${typeof amount}`);
 
     let list = [];
@@ -497,10 +518,8 @@ export default class Server {
   _serialize(body) {
     if (typeof body === 'string') {
       return body;
-    } else if (body) {
-      return JSON.stringify(body);
     } else {
-      return '{"error": "not found"}';
+      return JSON.stringify(body);
     }
   }
 
@@ -639,6 +658,18 @@ export default class Server {
    *
    * @private
    */
+  _validateCreateType(type) {
+    let modelExists = (this.schema && this.schema.modelFor(camelize(type)));
+    let dbCollectionExists = this.db[toInternalCollectionName(type)];
+    let isSingular = type === singularize(type);
+
+    return isSingular && (modelExists || dbCollectionExists);
+  }
+
+  /**
+   *
+   * @private
+   */
   _validateTraits(traits, factory, type) {
     traits.forEach((traitName) => {
       if (!factory.isTrait(traitName)) {
@@ -665,33 +696,27 @@ export default class Server {
    *
    * @private
    */
-  _mapAssociationsFromAttributes(modelType, attributes) {
+  _mapAssociationsFromAttributes(modelName, attributes, overrides = {}) {
     Object.keys(attributes || {}).filter((attr) => {
       return isAssociation(attributes[attr]);
     }).forEach((attr) => {
-      let association = attributes[attr];
-      let associationName = this._fetchAssociationNameFromModel(modelType, attr);
+      let modelClass = this.schema.modelClassFor(modelName);
+      let association = modelClass.associationFor(attr);
+
+      assert(association && association.isBelongsTo,
+        `You're using the \`association\` factory helper on the '${attr}' attribute of your ${modelName} factory, but that attribute is not a \`belongsTo\` association. Read the Factories docs for more information: http://www.ember-cli-mirage.com/docs/v0.3.x/factories/#factories-and-relationships`
+      );
+
+      let isSelfReferentialBelongsTo = association && association.isBelongsTo && association.modelName === modelName;
+
+      assert(!isSelfReferentialBelongsTo, `You're using the association() helper on your ${modelName} factory for ${attr}, which is a belongsTo self-referential relationship. You can't do this as it will lead to infinite recursion. You can move the helper inside of a trait and use it selectively.`);
+
+      let factoryAssociation = attributes[attr];
       let foreignKey = `${camelize(attr)}Id`;
-      attributes[foreignKey] = this.create(associationName, ...association.traitsAndOverrides).id;
+      if (!overrides[attr]) {
+        attributes[foreignKey] = this.create(association.modelName, ...factoryAssociation.traitsAndOverrides).id;
+      }
       delete attributes[attr];
     });
-  }
-
-  /**
-   *
-   * @private
-   */
-  _fetchAssociationNameFromModel(modelType, associationAttribute) {
-    let camelizedModelType = camelize(modelType);
-    let model = this.schema.modelFor(camelizedModelType);
-    if (!model) {
-      throw new Error(`Model not registered: ${modelType}`);
-    }
-
-    let association = model.class.findBelongsToAssociation(associationAttribute);
-    if (!association) {
-      throw new Error(`You're using the \`association\` factory helper on the '${associationAttribute}' attribute of your ${modelType} factory, but that attribute is not a \`belongsTo\` association. Read the Factories docs for more information: http://www.ember-cli-mirage.com/docs/v0.3.x/factories/#factories-and-relationships`);
-    }
-    return camelize(association.modelName);
   }
 }

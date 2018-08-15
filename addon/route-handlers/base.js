@@ -1,6 +1,8 @@
 import assert from 'ember-cli-mirage/assert';
 import { camelize, singularize, dasherize } from 'ember-cli-mirage/utils/inflector';
 
+const PATH_VAR_REGEXP = /^:/;
+
 export default class BaseRouteHandler {
 
   getModelClassFromPath(fullPath) {
@@ -11,7 +13,7 @@ export default class BaseRouteHandler {
     let lastPath;
     while (path.length > 0) {
       lastPath = path.splice(-1)[0];
-      if (lastPath && lastPath !== ':id') {
+      if (lastPath && !PATH_VAR_REGEXP.test(lastPath)) {
         break;
       }
     }
@@ -55,14 +57,28 @@ export default class BaseRouteHandler {
     }
 
     if (json.data.relationships) {
-      Object.keys(json.data.relationships).forEach((key) => {
-        let relationship = json.data.relationships[key];
+      Object.keys(json.data.relationships).forEach((relationshipName) => {
+        let relationship = json.data.relationships[relationshipName];
+        let modelClass = this.schema.modelClassFor(modelName);
+        let association = modelClass.associationFor(camelize(relationshipName));
+        let valueForRelationship;
 
-        if (Array.isArray(relationship.data)) {
-          attrs[`${camelize(singularize(key))}Ids`] = relationship.data.map(rel => rel.id);
+        assert(
+          association,
+          `You're passing the relationship '${relationshipName}' to the '${modelName}' model via a ${request.method} to '${request.url}', but you did not define the '${relationshipName}' association on the '${modelName}' model. http://www.ember-cli-mirage.com/docs/v0.4.x/models/#associations`
+        );
+
+        if (association.isPolymorphic) {
+          valueForRelationship = relationship.data;
+
+        } else if (association.isHasMany) {
+          valueForRelationship = relationship.data && relationship.data.map(rel => rel.id);
+
         } else {
-          attrs[`${camelize(key)}Id`] = relationship.data && relationship.data.id;
+          valueForRelationship = relationship.data && relationship.data.id;
         }
+
+        attrs[association.identifier] = valueForRelationship;
       }, {});
     }
 

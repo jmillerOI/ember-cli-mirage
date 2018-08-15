@@ -28,12 +28,24 @@ module('Unit | Route handlers | Shorthands | BaseShorthandRouteHandler', functio
     assert.equal(this.handler._getIdForRequest(this.request), 'someID', 'it returns a number');
   });
 
-  test('getModelClassFromPath works', function(assert) {
+  test('getModelClassFromPath works with various named route path variable', function(assert) {
     let urlWithSlash = '/api/fancy-users';
     let urlWithIdAndSlash = '/api/fancy-users/:id';
 
     assert.equal(this.handler.getModelClassFromPath(urlWithSlash), 'fancy-user', 'it returns a singular model name');
     assert.equal(this.handler.getModelClassFromPath(urlWithIdAndSlash, true), 'fancy-user', 'it returns a singular model name');
+
+    urlWithSlash = '/api/exquisite-users';
+    urlWithIdAndSlash = '/api/exquisite-users/:objectId';
+
+    assert.equal(this.handler.getModelClassFromPath(urlWithSlash), 'exquisite-user', 'it returns a singular model name');
+    assert.equal(this.handler.getModelClassFromPath(urlWithIdAndSlash, true), 'exquisite-user', 'it returns a singular model name');
+
+    urlWithSlash = '/api/elegant-users';
+    urlWithIdAndSlash = '/api/elegant-users/:firstName/:lastName';
+
+    assert.equal(this.handler.getModelClassFromPath(urlWithSlash), 'elegant-user', 'it returns a singular model name');
+    assert.equal(this.handler.getModelClassFromPath(urlWithIdAndSlash, true), 'elegant-user', 'it returns a singular model name');
   });
 
   test('it can read the id from the url', function(assert) {
@@ -47,113 +59,4 @@ module('Unit | Route handlers | Shorthands | BaseShorthandRouteHandler', functio
     assert.equal(this.handler._getIdForRequest(request, jsonApiDoc), 'jsonapi-id', 'it returns id from json api data.');
   });
 
-  test('_getAttrsForRequest works with attributes and relationships', function(assert) {
-    let payload = {
-      'data': {
-        'attributes': {
-          'does-mirage': true,
-          'name': 'Sam'
-        },
-        'relationships': {
-          'company': {
-            'data': {
-              'id': '1',
-              'type': 'companies'
-            }
-          },
-          'employees': {
-            'data': [{
-              'id': '1',
-              'type': 'employees'
-            }, {
-              'id': '2',
-              'type': 'employees'
-            }, {
-              'id': '3',
-              'type': 'employees'
-            }]
-          },
-          'nothings': {
-            'data': []
-          },
-          'github-account': {
-            'data': {
-              'id': '1',
-              'type': 'github-accounts'
-            }
-          },
-          'something': {
-            'data': null
-          }
-        },
-        'type': 'github-account'
-      }
-    };
-
-    this.handler._getJsonApiDocForRequest = function() {
-      return payload;
-    };
-
-    let attrs = this.handler._getAttrsForRequest(this.request, 'user');
-
-    assert.deepEqual(
-      attrs,
-      {
-        name: 'Sam',
-        doesMirage: true,
-        companyId: '1',
-        employeeIds: ['1', '2', '3'],
-        nothingIds: [],
-        githubAccountId: '1',
-        somethingId: null
-      },
-      'it normalizes data correctly.'
-    );
-  });
-
-  test('_getAttrsForRequest works with just relationships', function(assert) {
-    let payload = {
-      'data': {
-        'relationships': {
-          'company': {
-            'data': {
-              'id': '1',
-              'type': 'companies'
-            }
-          }
-        },
-        'type': 'github-account'
-      }
-    };
-
-    this.handler._getJsonApiDocForRequest = function() {
-      return payload;
-    };
-
-    let attrs = this.handler._getAttrsForRequest(this.request, 'user');
-
-    assert.deepEqual(
-      attrs,
-      {
-        companyId: '1'
-      },
-      'it normalizes data correctly.'
-    );
-  });
-
-  test('_getAttrsForRequest works with just type', function(assert) {
-    let payload = {
-      'data': {
-        'type': 'github-account'
-      }
-    };
-
-    this.handler._getJsonApiDocForRequest = function(request, modelName) {
-      return payload;
-    };
-
-    let attrs = this.handler._getAttrsForRequest(this.request, 'user');
-
-    assert.deepEqual(attrs, {});
-  });
 });

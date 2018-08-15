@@ -2,6 +2,7 @@ import ActiveModelSerializer from './active-model-serializer';
 import { camelize, singularize, pluralize } from '../utils/inflector';
 
 export default ActiveModelSerializer.extend({
+  serializeIds: 'always',
 
   keyForModel(type) {
     return camelize(type);
@@ -30,5 +31,4 @@ export default ActiveModelSerializer.extend({
   getCoalescedIds(request) {
     return request.queryParams && request.queryParams.ids;
   }
-
 });
